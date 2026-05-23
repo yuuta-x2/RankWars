@@ -1527,13 +1527,20 @@ function performMoleClawStrike(damage) {
 
 // Viper customizable path functions
 function fireViperWaypoints(side = 'main') {
+    const viperConfig = window.TRIGGER_CATALOG["Viper"];
     if (tempViperWaypoints.length < 2) {
+        if (player.trion < viperConfig.trionCost) {
+            addLog("[ERROR] Insufficient Trion reserves to deploy Viper!", "system");
+            tempViperWaypoints = [];
+            return;
+        }
+        player.trion -= viperConfig.trionCost;
+        fireViperZigzag(side);
         tempViperWaypoints = [];
         return;
     }
 
     // Deduct base Viper trion cost exactly once on launch
-    const viperConfig = window.TRIGGER_CATALOG["Viper"];
     if (player.trion < viperConfig.trionCost) {
         addLog("[ERROR] Insufficient Trion reserves to deploy Viper waypoints!", "system");
         tempViperWaypoints = [];
@@ -1726,12 +1733,12 @@ function executeCompositeFusion() {
         fusionType = 'hornet';
         trionCost = 80;
     } else if (leftTrig === 'Viper' && rightTrig === 'Viper') {
-        fusionType = 'striker';
-        trionCost = 80;
+        // fusionType = 'striker';
+        // trionCost = 80;
     }
 
     if (!fusionType) {
-        addLog("[WARNING] No valid composite fusion combination equipped/selected! Combinations: Asteroid+Asteroid (Gimlet), Asteroid+Meteora (Tomahawk), Hound+Meteora (Salamander), Asteroid+Viper (Cobra), Hound+Hound (Hornet), Viper+Viper (Striker)", "system");
+        addLog("[WARNING] No valid composite fusion combination equipped/selected! Combinations: Asteroid+Asteroid (Gimlet), Asteroid+Meteora (Tomahawk), Hound+Meteora (Salamander), Asteroid+Viper (Cobra), Hound+Hound (Hornet)", "system");
         return;
     }
 
