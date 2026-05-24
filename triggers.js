@@ -161,7 +161,7 @@ const TRIGGER_CATALOG = {
     "Shield": {
         name: "Shield",
         category: "support",
-        description: "Green light barrier. Resize with Scroll: Small/Strong to 360°/Weak.",
+        description: "Green light barrier. Blocks standard attacks in arc. Standard Shield slows speed by 20% (drains 0.5 Trion/frame passively; 25% Trion of blocked dmg). Full Shield covers a full 360° and slows speed by 40% (drains 1.0 Trion/frame passively; 8% Trion of blocked dmg).",
         trionCost: 10, // Passive consumption on hit
         cooldown: 100,
         damage: 0
@@ -552,12 +552,11 @@ class GrasshopperPad {
                 let angle = agent.angle;
 
                 if (agent.id === 'player') {
-                    // Check if mouse globals are available
-                    const mX = (window.mouseX !== undefined) ? window.mouseX : 0;
-                    const mY = (window.mouseY !== undefined) ? window.mouseY : 0;
-                    const camX = (window.camera && window.camera.x !== undefined) ? window.camera.x : 0;
-                    const camY = (window.camera && window.camera.y !== undefined) ? window.camera.y : 0;
-                    angle = Math.atan2((mY + camY) - agent.y, (mX + camX) - agent.x);
+                    if (agent.vx !== 0 || agent.vy !== 0) {
+                        angle = Math.atan2(agent.vy, agent.vx);
+                    } else {
+                        angle = agent.angle;
+                    }
                 } else {
                     // For AI: use their target agent direction or current motion direction
                     if (agent.targetAgent) {

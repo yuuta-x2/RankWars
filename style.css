@@ -665,11 +665,45 @@ h3,
 }
 
 .stat-value {
-    width: 25px;
-    text-align: right;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    min-width: 65px;
     font-size: 0.85rem;
     font-weight: 700;
     color: var(--text-primary);
+}
+
+.stat-btn {
+    background: rgba(0, 240, 255, 0.1);
+    border: 1px solid var(--border-cyan);
+    color: var(--text-accent);
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 900;
+    transition: all 0.2s ease;
+    user-select: none;
+    padding: 0;
+    line-height: 1;
+}
+
+.stat-btn:hover {
+    background: var(--border-cyan);
+    color: #000;
+    box-shadow: 0 0 8px var(--border-cyan);
+}
+
+.stat-num {
+    display: inline-block;
+    min-width: 15px;
+    text-align: center;
 }
 
 .agent-bio {

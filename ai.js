@@ -253,7 +253,7 @@ class AIAgent {
                         let angleDiff = attackAngle - this.angle;
                         angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
 
-                        const currentShieldAngle = isFullShield ? 150 : this.shieldAngle;
+                        const currentShieldAngle = isFullShield ? 360 : 90;
                         const shieldRad = (currentShieldAngle * Math.PI) / 360;
                         if (Math.abs(angleDiff) <= shieldRad) {
                             shouldBlock = true;
@@ -274,15 +274,15 @@ class AIAgent {
 
                     if (shouldBlock && (!isGimlet || isFullShield)) {
                         if (isFullShield) {
-                            // Full Shield holds! Only drain 2% of the damage as Trion cost
-                            this.trion -= amount * 0.02;
+                            // Full Shield holds! Only drain 8% of the damage as Trion cost
+                            this.trion -= amount * 0.08;
                             window.audio.playShieldBlock();
                             if (window.spawnSparks) {
                                 window.spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#ffd700', 16);
                             }
                         } else {
-                            // Standard Shield holds! Completely block damage to Trion HP body, charge 8% Trion cost
-                            this.trion -= amount * 0.08;
+                            // Standard Shield holds! Completely block damage to Trion HP body, charge 25% Trion cost
+                            this.trion -= amount * 0.25;
                             window.audio.playShieldBlock();
                             if (window.spawnSparks) {
                                 window.spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#39ff14', 12);
@@ -393,6 +393,17 @@ class AIAgent {
         const hasDualScorpion = this.briefcase.main[this.activeMain] === 'Scorpion' && this.briefcase.sub[this.activeSub] === 'Scorpion';
         if (hasDualScorpion) {
             currentSpeed *= 1.15;
+        }
+
+        // Apply movement speed penalty if shielding
+        if (this.isShieldActive && this.trion > 0) {
+            const hasShieldMain = this.briefcase.main[this.activeMain] === "Shield";
+            const hasShieldSub = this.briefcase.sub[this.activeSub] === "Shield";
+            if (hasShieldMain && hasShieldSub) {
+                currentSpeed *= 0.60; // 40% speed penalty for Full Shield
+            } else {
+                currentSpeed *= 0.80; // 20% speed penalty for Standard Shield
+            }
         }
 
         if (inEnemySpider) {
@@ -615,7 +626,10 @@ class AIAgent {
             // Turn shield on towards attack angle
             this.angle = incomingAngle;
             // Shield cost: passive consumption on frame
-            this.trion -= 1.0;
+            const hasShieldMain = this.briefcase.main[this.activeMain] === "Shield";
+            const hasShieldSub = this.briefcase.sub[this.activeSub] === "Shield";
+            const isFullShield = hasShieldMain && hasShieldSub;
+            this.trion -= isFullShield ? 1.0 : 0.5;
             this.isShieldActive = true;
         } else {
             this.isShieldActive = false;
@@ -1137,13 +1151,18 @@ class AIAgent {
 
         // Draw active Shield arc if AI is blocking
         if (this.isShieldActive) {
-            ctx.save();
-            ctx.strokeStyle = 'rgba(57, 255, 20, 0.85)';
-            ctx.lineWidth = 5;
-            ctx.shadowBlur = 10;
-            ctx.shadowColor = '#39ff14';
+            const hasShieldMain = this.briefcase.main[this.activeMain] === "Shield";
+            const hasShieldSub = this.briefcase.sub[this.activeSub] === "Shield";
+            const isFullShield = hasShieldMain && hasShieldSub;
 
-            const shieldRad = (this.shieldAngle * Math.PI) / 360; // half angle bounds
+            ctx.save();
+            ctx.strokeStyle = isFullShield ? 'rgba(0, 240, 255, 0.9)' : 'rgba(57, 255, 20, 0.85)';
+            ctx.lineWidth = isFullShield ? 6 : 5;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = isFullShield ? '#00f0ff' : '#39ff14';
+
+            const currentShieldAngle = isFullShield ? 360 : 90;
+            const shieldRad = (currentShieldAngle * Math.PI) / 360; // half angle bounds
             ctx.beginPath();
             ctx.arc(0, 0, this.radius + 8, -shieldRad, shieldRad);
             ctx.stroke();
