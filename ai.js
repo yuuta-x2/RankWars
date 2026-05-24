@@ -893,6 +893,9 @@ class AIAgent {
                         range: 160
                     });
                 }
+                if (window.cutSpiderWebsInArc) {
+                    window.cutSpiderWebsInArc(this, 160);
+                }
                 return;
             }
 
@@ -922,6 +925,9 @@ class AIAgent {
                         maxLife: 10,
                         range: activeMainConfig.range || 45
                     });
+                }
+                if (window.cutSpiderWebsInArc) {
+                    window.cutSpiderWebsInArc(this, activeMainConfig.range || 45);
                 }
                 return;
             }

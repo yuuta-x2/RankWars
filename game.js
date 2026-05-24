@@ -28,6 +28,50 @@ function getWorldMouse() {
     }
 }
 
+function cutSpiderWebsInArc(agent, range) {
+    if (!arena || !arena.spiderWebs) return;
+
+    for (let i = arena.spiderWebs.length - 1; i >= 0; i--) {
+        const web = arena.spiderWebs[i];
+        if (web.ownerId === agent.id) continue; // Only cut ENEMY webs!
+
+        // Short-circuit check if segment is completely out of range
+        const minDist = pointToLineDistance(agent.x, agent.y, web.x1, web.y1, web.x2, web.y2);
+        if (minDist > range) continue;
+
+        // Sample 11 points along the segment to check intersection
+        for (let t = 0; t <= 1; t += 0.1) {
+            const sx = web.x1 + t * (web.x2 - web.x1);
+            const sy = web.y1 + t * (web.y2 - web.y1);
+
+            const dx = sx - agent.x;
+            const dy = sy - agent.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            if (dist <= range) {
+                const targetAngle = Math.atan2(dy, dx);
+                let angleDiff = targetAngle - agent.angle;
+                angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
+
+                const slashSweep = (80 * Math.PI) / 180;
+                if (Math.abs(angleDiff) <= slashSweep / 2) {
+                    // Severed!
+                    if (window.spawnSparks) {
+                        window.spawnSparks(sx, sy, '#bd00ff', 12);
+                    }
+                    if (typeof addLog !== 'undefined') {
+                        const cutterName = agent.id === 'player' ? 'Your' : `${agent.name}'s`;
+                        addLog(`[TACTICAL] ${cutterName} blade severed an enemy tripwire!`, 'system');
+                    }
+                    arena.spiderWebs.splice(i, 1);
+                    break;
+                }
+            }
+        }
+    }
+}
+window.cutSpiderWebsInArc = cutSpiderWebsInArc;
+
 const bullets = [];
 const grPads = [];
 const particles = []; // glowing sparks, digital blocks, slashes
@@ -1574,6 +1618,9 @@ function performBladeSlash(damage, range, color, isGenyo = false, isSenku = fals
             }
         }
     }
+
+    // Cut enemy spider webs that intersect the slash arc
+    cutSpiderWebsInArc(player, slashArc.range);
 }
 
 function performMoleClawStrike(damage) {
