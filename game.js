@@ -79,6 +79,7 @@ const particles = []; // glowing sparks, digital blocks, slashes
 // Interactive Drawing States
 let tempViperWaypoints = [];
 let isDrawingViper = false;
+let viperDrawingHand = null;
 
 let spiderAnchor = null; // first click coordinate for Spider Wire {x, y}
 
@@ -502,16 +503,30 @@ function setupMouseListeners() {
 
         if (e.button === 0) {
             isLeftMouseDown = true;
+            window.isLeftMouseDown = true;
 
             // Check if drawing Viper path
             const activeTrig = player.briefcase.main[player.activeMainIndex];
             if (activeTrig === 'Viper') {
                 isDrawingViper = true;
+                viperDrawingHand = 'main';
                 const wm = getWorldMouse();
                 tempViperWaypoints = [{ x: wm.x, y: wm.y }];
             }
         }
-        if (e.button === 2) isRightMouseDown = true;
+        if (e.button === 2) {
+            isRightMouseDown = true;
+            window.isRightMouseDown = true;
+
+            // Check if drawing Viper path for sub hand (right click)
+            const activeTrig = player.briefcase.sub[player.activeSubIndex];
+            if (activeTrig === 'Viper') {
+                isDrawingViper = true;
+                viperDrawingHand = 'sub';
+                const wm = getWorldMouse();
+                tempViperWaypoints = [{ x: wm.x, y: wm.y }];
+            }
+        }
     });
 
     let lastTap = 0;
@@ -527,14 +542,26 @@ function setupMouseListeners() {
         if (tapLength < 300 && tapLength > 0) {
             // Double tap - right click
             isRightMouseDown = true;
+            window.isRightMouseDown = true;
             isLeftMouseDown = false;
+            window.isLeftMouseDown = false;
+
+            const activeTrig = player.briefcase.sub[player.activeSubIndex];
+            if (activeTrig === 'Viper') {
+                isDrawingViper = true;
+                viperDrawingHand = 'sub';
+                const wm = getWorldMouse();
+                tempViperWaypoints = [{ x: wm.x, y: wm.y }];
+            }
         } else {
             // Single tap - left click
             isLeftMouseDown = true;
+            window.isLeftMouseDown = true;
 
             const activeTrig = player.briefcase.main[player.activeMainIndex];
             if (activeTrig === 'Viper') {
                 isDrawingViper = true;
+                viperDrawingHand = 'main';
                 const wm = getWorldMouse();
                 tempViperWaypoints = [{ x: wm.x, y: wm.y }];
             }
@@ -545,36 +572,63 @@ function setupMouseListeners() {
     window.addEventListener('mouseup', (e) => {
         if (e.button === 0) {
             isLeftMouseDown = false;
+            window.isLeftMouseDown = false;
             // Trigger Viper projectile release
-            if (isDrawingViper) {
+            if (isDrawingViper && viperDrawingHand === 'main') {
                 isDrawingViper = false;
-                fireViperWaypoints();
+                viperDrawingHand = null;
+                fireViperWaypoints('main');
             }
         }
-        if (e.button === 2) isRightMouseDown = false;
+        if (e.button === 2) {
+            isRightMouseDown = false;
+            window.isRightMouseDown = false;
+            // Trigger Viper projectile release for right click
+            if (isDrawingViper && viperDrawingHand === 'sub') {
+                isDrawingViper = false;
+                viperDrawingHand = null;
+                fireViperWaypoints('sub');
+            }
+        }
     });
 
     window.addEventListener('touchend', (e) => {
         isLeftMouseDown = false;
+        window.isLeftMouseDown = false;
         isRightMouseDown = false;
+        window.isRightMouseDown = false;
         if (isDrawingViper) {
             isDrawingViper = false;
-            fireViperWaypoints();
+            const hand = viperDrawingHand || 'main';
+            viperDrawingHand = null;
+            fireViperWaypoints(hand);
         }
     });
 
-    // Resize camera using scroll wheel for snipers
+    // Resize camera using scroll wheel for snipers OR resize shield
     canvas.addEventListener('wheel', (e) => {
         if (!matchActive || !player) return;
         e.preventDefault();
 
         const activeMainTrig = player.briefcase.main[player.activeMainIndex];
+        const activeSubTrig = player.briefcase.sub[player.activeSubIndex];
         const isHoldingSniper = (activeMainTrig === 'Egret' || activeMainTrig === 'Ibis' || activeMainTrig === 'Lightning');
+        const hasShieldMain = activeMainTrig === 'Shield';
+        const hasShieldSub = activeSubTrig === 'Shield';
+        const isHoldingShield = hasShieldMain || hasShieldSub;
 
         if (isHoldingSniper) {
             // Adjust camera zoom: scroll down (deltaY > 0) to zoom out, scroll up (deltaY < 0) to zoom in
             const direction = e.deltaY > 0 ? -1 : 1;
             cameraZoom = Math.max(0.45, Math.min(1.0, cameraZoom + direction * 0.05));
+        } else if (isHoldingShield) {
+            const bothAreShield = hasShieldMain && hasShieldSub;
+            const direction = e.deltaY > 0 ? 1 : -1; // scroll down = expand (+), scroll up = shrink (-)
+            if (bothAreShield) {
+                player.shieldAngleFull = Math.max(10, Math.min(360, (player.shieldAngleFull || 360) + direction * 15));
+            } else {
+                player.shieldAngleStandard = Math.max(10, Math.min(90, (player.shieldAngleStandard || 90) + direction * 5));
+            }
         }
     });
 
@@ -781,7 +835,12 @@ function startSimulation() {
         activeMainIndex: 0,
         activeSubIndex: 0,
 
-        shieldAngle: 90, // scrollable shield degree
+        shieldAngleStandard: 90,
+        shieldAngleFull: 360,
+        shieldDurability: 500,
+        shieldDurabilityMax: 500,
+        shieldCooldown: 0,
+        wasShieldActive: false,
 
         // Passive Camouflage
         isBagwormActive: false,
@@ -824,11 +883,11 @@ function startSimulation() {
 
             if (bothAreShield) {
                 const eitherPressed = isLeftMouseDown || isRightMouseDown;
-                mainShieldActive = !this.isChameleonActive && eitherPressed && this.trion > 0;
-                subShieldActive = !this.isChameleonActive && eitherPressed && this.trion > 0;
+                mainShieldActive = !this.isChameleonActive && eitherPressed && this.trion > 0 && this.shieldCooldown <= 0;
+                subShieldActive = !this.isChameleonActive && eitherPressed && this.trion > 0 && this.shieldCooldown <= 0;
             } else {
-                mainShieldActive = !this.isChameleonActive && (hasShieldMain && isLeftMouseDown) && this.trion > 0;
-                subShieldActive = !this.isChameleonActive && (hasShieldSub && isRightMouseDown) && this.trion > 0;
+                mainShieldActive = !this.isChameleonActive && (hasShieldMain && isLeftMouseDown) && this.trion > 0 && this.shieldCooldown <= 0;
+                subShieldActive = !this.isChameleonActive && (hasShieldSub && isRightMouseDown) && this.trion > 0 && this.shieldCooldown <= 0;
             }
 
             const isFullShield = mainShieldActive && subShieldActive;
@@ -838,24 +897,27 @@ function startSimulation() {
             const isGimlet = bulletType === 'gimlet';
 
             if (isBlocked && (!isGimlet || isFullShield)) {
-                if (isFullShield) {
-                    // Full Shield holds! Only drain 8% of the damage as Trion cost
-                    this.trion -= amount * 0.08;
+                // Shield holds! Reduce durability
+                this.shieldDurability -= amount;
+
+                if (this.shieldDurability <= 0) {
+                    // Shield shatters!
+                    this.shieldDurability = 0;
+                    this.shieldCooldown = 180; // 3 seconds at 60fps
+                    this.wasShieldActive = false;
+
+                    // Play shatter sound and extra sparks/effects
                     window.audio.playShieldBlock();
-                    // Golden sparks for Full Shield
-                    spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#ffd700', 16);
-                    if (isGimlet) {
-                        addLog("[TACTICAL] Full Shield successfully blocked Gimlet!", "system");
+                    if (window.audio.playExplosion) {
+                        window.audio.playShieldBlock();
                     }
+                    spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#ff3b30', 25);
+                    addLog("[TACTICAL] Your Shield has been SHATTERED! Entering 3s cooldown.", "kill");
                 } else {
-                    // Standard Shield holds! Completely block damage to Trion HP body, charge 25% Trion cost
-                    this.trion -= amount * 0.25;
+                    // Shield survived the hit
                     window.audio.playShieldBlock();
-                    // Green sparks for standard Shield
-                    spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#39ff14', 12);
-                }
-                if (this.trion <= 0) {
-                    this.trion = 0;
+                    const sparkColor = isFullShield ? '#ffd700' : '#39ff14';
+                    spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, sparkColor, isFullShield ? 16 : 12);
                 }
                 return;
             }
@@ -893,9 +955,7 @@ function startSimulation() {
                 this.bodyHp = 0;
                 triggerBailOut('player', 'Trion Body Destroyed');
             }
-        },
-
-        isBlockingAngle(attackerId) {
+        }, isBlockingAngle(attackerId) {
             if (this.trion <= 0) return false;
             const hasShieldMain = this.briefcase.main[this.activeMainIndex] === 'Shield';
             const hasShieldSub = this.briefcase.sub[this.activeSubIndex] === 'Shield';
@@ -903,31 +963,26 @@ function startSimulation() {
 
             let mainShield = false;
             let subShield = false;
-
             if (bothAreShield) {
-                const eitherPressed = isLeftMouseDown || isRightMouseDown;
-                mainShield = !this.isChameleonActive && eitherPressed;
-                subShield = !this.isChameleonActive && eitherPressed;
+                const pressed = isLeftMouseDown || isRightMouseDown;
+                mainShield = !this.isChameleonActive && pressed && this.shieldCooldown <= 0;
+                subShield = !this.isChameleonActive && pressed && this.shieldCooldown <= 0;
             } else {
-                mainShield = !this.isChameleonActive && (hasShieldMain && isLeftMouseDown);
-                subShield = !this.isChameleonActive && (hasShieldSub && isRightMouseDown);
+                mainShield = !this.isChameleonActive && (hasShieldMain && isLeftMouseDown) && this.shieldCooldown <= 0;
+                subShield = !this.isChameleonActive && (hasShieldSub && isRightMouseDown) && this.shieldCooldown <= 0;
             }
 
             if (!mainShield && !subShield) return false;
 
-            // Find attacker
-            const attacker = allAgents.find(a => a.id === attackerId);
+            const attacker = window.allAgents.find(a => a.id === attackerId);
             if (!attacker) return false;
 
             const attackAngle = Math.atan2(attacker.y - this.y, attacker.x - this.x);
-            let angleDiff = attackAngle - this.angle;
-            // Normalize
-            angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
-
-            // Full Shield provides a complete 360-degree coverage!
-            const currentShieldAngle = (mainShield && subShield) ? 360 : 90;
-            const shieldRad = (currentShieldAngle * Math.PI) / 360; // half angle bounds
-            return Math.abs(angleDiff) <= shieldRad;
+            let diff = attackAngle - this.angle;
+            diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+            const currentShieldAngle = (mainShield && subShield) ? this.shieldAngleFull : this.shieldAngleStandard;
+            const shieldRad = (currentShieldAngle * Math.PI) / 360;
+            return Math.abs(diff) <= shieldRad;
         }
     };
 
@@ -1002,7 +1057,8 @@ function startSimulation() {
     // Initialize starting active slots for player to the first slots
     player.activeMainIndex = 0;
     player.activeSubIndex = 0;
-    player.isBagwormActive = (player.briefcase.main[0] === 'Bagworm' || player.briefcase.sub[0] === 'Bagworm');
+    // Bagworm is forced OFF during countdown so player can see all positions on radar
+    player.isBagwormActive = false;
 
     // Clear vectors
     bullets.length = 0;
@@ -1030,20 +1086,8 @@ function startSimulation() {
             ai.x = aiSpawn.x;
             ai.y = aiSpawn.y;
 
-            // Activate initial Bagworm on AI if equipped (with 65% chance so not all enemies start with it active)
-            let aiBgwMainIdx = ai.briefcase.main.indexOf('Bagworm');
-            let aiBgwSubIdx = ai.briefcase.sub.indexOf('Bagworm');
-            if ((aiBgwMainIdx !== -1 || aiBgwSubIdx !== -1) && Math.random() < 0.65) {
-                if (aiBgwMainIdx !== -1) {
-                    ai.activeMain = aiBgwMainIdx;
-                    ai.isBagwormActive = true;
-                } else if (aiBgwSubIdx !== -1) {
-                    ai.activeSub = aiBgwSubIdx;
-                    ai.isBagwormActive = true;
-                }
-            } else {
-                ai.isBagwormActive = false;
-            }
+            // Bagworm is forced OFF during countdown so player can assess positions
+            ai.isBagwormActive = false;
 
             allAgents.push(ai);
         });
@@ -1070,6 +1114,10 @@ function startSimulation() {
     // Launch pre-match countdown
     startCountdown(() => {
         matchActive = true;
+
+        // Re-activate Bagworm for all agents now that countdown is over
+        activateBagwormOnMatchStart();
+
         addLog("[SYSTEM] Rank Wars Match Commenced! Deploying triggers...", 'system');
         requestAnimationFrame(gameLoop);
     });
@@ -1117,6 +1165,7 @@ function gameLoop() {
 
     updateProjectilesAndInteractives();
     updateAIAgents();
+    resolveAgentCollisions();
     updateParticles();
     arena.updateDebris();
 
@@ -1174,6 +1223,9 @@ function updatePlayerInputPhysics() {
     if (player.cooldowns.main > 0) player.cooldowns.main -= 16.67;
     if (player.cooldowns.sub > 0) player.cooldowns.sub -= 16.67;
 
+    // Decrement shield cooldown
+    if (player.shieldCooldown > 0) player.shieldCooldown--;
+
     // Decrement composite silence timer
     if (player.compositeSilenceTimer && player.compositeSilenceTimer > 0) {
         player.compositeSilenceTimer -= 16.67;
@@ -1220,13 +1272,27 @@ function updatePlayerInputPhysics() {
     if (player.isChameleonActive) player.trion -= 0.8;
 
     // Active Shield passive drain
-    const mainShieldActive = !player.isChameleonActive && (player.briefcase.main[player.activeMainIndex] === 'Shield' && isLeftMouseDown) && player.trion > 0;
-    const subShieldActive = !player.isChameleonActive && (player.briefcase.sub[player.activeSubIndex] === 'Shield' && isRightMouseDown) && player.trion > 0;
+    const mainShieldActive = !player.isChameleonActive && (player.briefcase.main[player.activeMainIndex] === 'Shield' && isLeftMouseDown) && player.trion > 0 && player.shieldCooldown <= 0;
+    const subShieldActive = !player.isChameleonActive && (player.briefcase.sub[player.activeSubIndex] === 'Shield' && isRightMouseDown) && player.trion > 0 && player.shieldCooldown <= 0;
     if (mainShieldActive && subShieldActive) {
         player.trion -= 1.0; // Passive consumption for Full Shield
     } else if (mainShieldActive || subShieldActive) {
         player.trion -= 0.5; // Passive consumption for Standard Shield
     }
+
+    const shieldActive = mainShieldActive || subShieldActive;
+    const isFullShield = mainShieldActive && subShieldActive;
+    player.shieldDurabilityMax = isFullShield ? (900 * 360 / (player.shieldAngleFull || 360)) : (500 * 90 / (player.shieldAngleStandard || 90));
+
+    if (shieldActive) {
+        if (!player.wasShieldActive) {
+            player.shieldDurability = player.shieldDurabilityMax;
+        }
+        player.shieldDurability = Math.min(player.shieldDurability, player.shieldDurabilityMax);
+    } else {
+        player.shieldDurability = 0;
+    }
+    player.wasShieldActive = shieldActive;
 
     if (player.isLeaking) {
         player.bodyHp -= player.leakRate / 60;
@@ -1492,8 +1558,8 @@ function executeTriggerAction(side) {
         }
 
         if (bulletType === 'viper') {
-            // Left click drag activates Viper drawing path
-            if (side === 'main' && isLeftMouseDown) {
+            // Left/Right click drag activates Viper drawing path
+            if ((side === 'main' && isLeftMouseDown) || (side === 'sub' && isRightMouseDown)) {
                 player.trion += config.trionCost; // Refund continuous drag costs
                 return;
             }
@@ -2185,7 +2251,7 @@ function executeCompositeFusion() {
     player.trion -= trionCost;
 
     // Enter charging phase!
-    player.compositeChargeTimer = 1800; // 1.8 seconds at 60fps (16.67ms increments)
+    player.compositeChargeTimer = 1300; // 1.3 seconds
     player.compositeFusionType = fusionType;
 
     // Deactivate active shields
@@ -2373,6 +2439,59 @@ function updateProjectilesAndInteractives() {
                 // Trigger small alert log once
                 if (Math.random() > 0.985) {
                     addLog(`[TACTICAL] Spider Wire tripped, slowing ${agent.name}!`, 'system');
+                }
+            }
+        }
+    }
+}
+
+function resolveAgentCollisions() {
+    if (!arena) return;
+
+    // Filter agents who haven't bailed out
+    const activeAgents = allAgents.filter(agent => !agent.bailedOut);
+
+    // Run multiple passes for multi-agent pushing stability (2 passes is standard and very performant)
+    for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < activeAgents.length; i++) {
+            const a = activeAgents[i];
+            for (let j = i + 1; j < activeAgents.length; j++) {
+                const b = activeAgents[j];
+
+                let dx = b.x - a.x;
+                let dy = b.y - a.y;
+                let dist = Math.sqrt(dx * dx + dy * dy);
+                const minDist = a.radius + b.radius;
+
+                if (dist < minDist) {
+                    // Avoid division by zero if they are perfectly stacked
+                    if (dist === 0) {
+                        dx = Math.random() - 0.5;
+                        dy = Math.random() - 0.5;
+                        dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                    }
+
+                    const overlap = minDist - dist;
+                    // Move them away from each other by half the overlap each
+                    const pushX = (dx / dist) * overlap * 0.5;
+                    const pushY = (dy / dist) * overlap * 0.5;
+
+                    a.x -= pushX;
+                    a.y -= pushY;
+                    b.x += pushX;
+                    b.y += pushY;
+
+                    // Resolve wall collision right after pushing to prevent getting pushed into walls
+                    const colA = arena.circleCollides(a.x, a.y, a.radius);
+                    if (colA.collided) {
+                        a.x = colA.x;
+                        a.y = colA.y;
+                    }
+                    const colB = arena.circleCollides(b.x, b.y, b.radius);
+                    if (colB.collided) {
+                        b.x = colB.x;
+                        b.y = colB.y;
+                    }
                 }
             }
         }
@@ -2719,11 +2838,11 @@ function drawPlayerCharacter() {
 
     if (bothAreShield) {
         const eitherPressed = isLeftMouseDown || isRightMouseDown;
-        mainShieldActiveDraw = !player.isChameleonActive && eitherPressed && player.trion > 0;
-        subShieldActiveDraw = !player.isChameleonActive && eitherPressed && player.trion > 0;
+        mainShieldActiveDraw = !player.isChameleonActive && eitherPressed && player.trion > 0 && player.shieldCooldown <= 0;
+        subShieldActiveDraw = !player.isChameleonActive && eitherPressed && player.trion > 0 && player.shieldCooldown <= 0;
     } else {
-        mainShieldActiveDraw = !player.isChameleonActive && (hasShieldMain && isLeftMouseDown) && player.trion > 0;
-        subShieldActiveDraw = !player.isChameleonActive && (hasShieldSub && isRightMouseDown) && player.trion > 0;
+        mainShieldActiveDraw = !player.isChameleonActive && (hasShieldMain && isLeftMouseDown) && player.trion > 0 && player.shieldCooldown <= 0;
+        subShieldActiveDraw = !player.isChameleonActive && (hasShieldSub && isRightMouseDown) && player.trion > 0 && player.shieldCooldown <= 0;
     }
 
     if (player.compositeChargeTimer && player.compositeChargeTimer > 0) {
@@ -2734,12 +2853,28 @@ function drawPlayerCharacter() {
     if (mainShieldActiveDraw || subShieldActiveDraw) {
         ctx.save();
         const isFull = mainShieldActiveDraw && subShieldActiveDraw;
-        ctx.strokeStyle = 'rgba(57, 255, 20, 0.85)';
+
+        // Dynamically fade color based on durability percentage
+        const durPct = (player.shieldDurability || 0) / (player.shieldDurabilityMax || 1);
+        let r, g, b;
+        if (durPct > 0.5) {
+            const p = (durPct - 0.5) * 2;
+            r = Math.floor(255 - p * (255 - 57));
+            g = Math.floor(255 - p * (255 - 255));
+            b = Math.floor(0 + p * 20);
+        } else {
+            const p = durPct * 2;
+            r = Math.floor(255);
+            g = Math.floor(p * 255);
+            b = 0;
+        }
+
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.85)`;
         ctx.lineWidth = 5;
         ctx.shadowBlur = 10;
-        ctx.shadowColor = '#39ff14';
+        ctx.shadowColor = `rgb(${r}, ${g}, ${b})`;
 
-        const currentShieldAngle = isFull ? 360 : 90;
+        const currentShieldAngle = isFull ? (player.shieldAngleFull || 360) : (player.shieldAngleStandard || 90);
         const shieldRad = (currentShieldAngle * Math.PI) / 360; // half angle bounds
         ctx.beginPath();
         ctx.arc(0, 0, player.radius + 8, -shieldRad, shieldRad);
@@ -2851,6 +2986,19 @@ function drawPlayerCharacter() {
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
         ctx.lineWidth = 0.5;
         ctx.strokeRect(barX, barY2, barWidth, barHeight);
+
+        // Shield Durability Bar (Yellow-Orange, only if active)
+        if (player.shieldDurability > 0) {
+            const barY3 = player.y - 43;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+            ctx.fillRect(barX, barY3, barWidth, barHeight);
+            const shieldFillWidth = Math.max(0, Math.min(1, player.shieldDurability / player.shieldDurabilityMax)) * barWidth;
+            ctx.fillStyle = '#ffdf00'; // Shield Yellow
+            ctx.fillRect(barX, barY3, shieldFillWidth, barHeight);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+            ctx.lineWidth = 0.5;
+            ctx.strokeRect(barX, barY3, barWidth, barHeight);
+        }
 
         ctx.restore();
     }
@@ -3251,6 +3399,44 @@ function renderHUDLabels() {
         leadPanel.classList.remove('active');
         document.getElementById('lead-desc').textContent = "Not Compatible";
     }
+
+    // Shield Cooldown overlay rendering
+    const cards = document.querySelectorAll('.hud-slot-card');
+    cards.forEach(card => {
+        const nameEl = card.querySelector('.name');
+        if (nameEl && nameEl.textContent === 'Shield') {
+            if (player.shieldCooldown > 0) {
+                const cdSec = Math.ceil(player.shieldCooldown / 60);
+                card.style.position = 'relative';
+                let cdOverlay = card.querySelector('.cd-overlay');
+                if (!cdOverlay) {
+                    cdOverlay = document.createElement('div');
+                    cdOverlay.className = 'cd-overlay';
+                    cdOverlay.style.position = 'absolute';
+                    cdOverlay.style.top = '0';
+                    cdOverlay.style.left = '0';
+                    cdOverlay.style.width = '100%';
+                    cdOverlay.style.height = '100%';
+                    cdOverlay.style.background = 'rgba(255, 0, 0, 0.4)';
+                    cdOverlay.style.display = 'flex';
+                    cdOverlay.style.alignItems = 'center';
+                    cdOverlay.style.justifyContent = 'center';
+                    cdOverlay.style.color = '#fff';
+                    cdOverlay.style.fontWeight = 'bold';
+                    cdOverlay.style.fontSize = '14px';
+                    cdOverlay.style.borderRadius = 'inherit';
+                    card.appendChild(cdOverlay);
+                }
+                cdOverlay.textContent = `${cdSec}s`;
+            } else {
+                const cdOverlay = card.querySelector('.cd-overlay');
+                if (cdOverlay) cdOverlay.remove();
+            }
+        } else {
+            const cdOverlay = card.querySelector('.cd-overlay');
+            if (cdOverlay) cdOverlay.remove();
+        }
+    });
 }
 
 function renderScoreLeaderboard() {
@@ -3712,29 +3898,88 @@ document.getElementById('return-lobby-btn').addEventListener('click', () => {
     bailoutMatch();
 });
 
+function activateBagwormOnMatchStart() {
+    allAgents.forEach(agent => {
+        if (agent.id === 'player') {
+            // Force re-evaluation of player's Bagworm based on active slot triggers
+            player.isBagwormActive = (player.briefcase.main[player.activeMainIndex] === 'Bagworm' || player.briefcase.sub[player.activeSubIndex] === 'Bagworm');
+        } else {
+            // For AI agents, evaluate state immediately to trigger Bagworm activation
+            if (typeof agent.evaluateState === 'function') {
+                agent.evaluateState(allAgents);
+                // If the AI has Bagworm and prefers it, let's activate it immediately on start
+                const hasBagworm = agent.briefcase.main.includes('Bagworm') || agent.briefcase.sub.includes('Bagworm');
+                if (hasBagworm && agent.prefersBagworm) {
+                    agent.isBagwormActive = true;
+                }
+            }
+        }
+    });
+}
+
 /* ==========================================================================
    PRE-MATCH COUNTDOWN SYSTEM
    ========================================================================== */
 
 function startCountdown(onComplete) {
+    // Force all agents' Bagworms OFF during countdown so player can see positions on radar/map
+    allAgents.forEach(agent => {
+        agent.isBagwormActive = false;
+    });
+
     const overlay = document.getElementById('countdown-overlay');
     const numberEl = document.getElementById('countdown-number');
     const barFill = document.getElementById('countdown-bar-fill');
-    
+
     if (!overlay || !numberEl) {
         // Fallback: skip countdown if elements missing
         if (onComplete) onComplete();
         return;
     }
 
-    let count = 5;
-    const totalSteps = 5;
-    
+    let count = 3;
+    const totalSteps = 3;
+
     // Show overlay
     overlay.classList.add('active');
     numberEl.textContent = count;
     numberEl.className = 'countdown-number';
     barFill.style.width = '100%';
+
+    // Pre-render loop: show arena, agents, and radar during countdown
+    // so the player can assess the battlefield before the match starts
+    let countdownRenderActive = true;
+
+    // Initialize camera to center on player position
+    if (player) {
+        camera.x = player.x - camera.width / 2;
+        camera.y = player.y - camera.height / 2;
+        camera.x = Math.max(0, Math.min(camera.x, arena.width - camera.width));
+        camera.y = Math.max(0, Math.min(camera.y, arena.height - camera.height));
+    }
+
+    function countdownRenderLoop() {
+        if (!countdownRenderActive) return;
+
+        // Update camera follow on player (no physics, just camera)
+        if (player) {
+            camera.x = player.x - camera.width / 2;
+            camera.y = player.y - camera.height / 2;
+            camera.x = Math.max(0, Math.min(camera.x, arena.width - camera.width));
+            camera.y = Math.max(0, Math.min(camera.y, arena.height - camera.height));
+        }
+
+        // Render the arena canvas (map + agents visible)
+        renderArenaCanvas();
+        // Render the tactical radar (shows all positions)
+        renderTacticalRadar();
+        // Render HUD labels so player can see their loadout
+        renderHUDLabels();
+
+        requestAnimationFrame(countdownRenderLoop);
+    }
+    // Start the pre-render loop immediately
+    requestAnimationFrame(countdownRenderLoop);
 
     const countInterval = setInterval(() => {
         count--;
@@ -3756,8 +4001,9 @@ function startCountdown(onComplete) {
         } else {
             // count < 0, cleanup and start
             clearInterval(countInterval);
+            countdownRenderActive = false; // Stop pre-render loop
             overlay.classList.remove('active');
-            numberEl.textContent = '5';
+            numberEl.textContent = '3';
             numberEl.className = 'countdown-number';
             barFill.style.width = '100%';
             if (onComplete) onComplete();
@@ -3773,7 +4019,7 @@ function setupHowToPlayModal() {
     const openBtn = document.getElementById('how-to-play-btn');
     const modal = document.getElementById('how-to-play-modal');
     const closeBtn = document.getElementById('htp-close-btn');
-    
+
     if (!openBtn || !modal) return;
 
     // Open modal
@@ -4037,7 +4283,12 @@ function startSquadSimulation() {
         },
         activeMainIndex: 0,
         activeSubIndex: 0,
-        shieldAngle: 90,
+        shieldAngleStandard: 90,
+        shieldAngleFull: 360,
+        shieldDurability: 350,
+        shieldDurabilityMax: 350,
+        shieldCooldown: 0,
+        wasShieldActive: false,
         isBagwormActive: false,
         isChameleonActive: false,
         bailedOut: false,
@@ -4071,11 +4322,11 @@ function startSquadSimulation() {
 
             if (bothAreShield) {
                 const eitherPressed = isLeftMouseDown || isRightMouseDown;
-                mainShieldActive = !this.isChameleonActive && eitherPressed && this.trion > 0;
-                subShieldActive = !this.isChameleonActive && eitherPressed && this.trion > 0;
+                mainShieldActive = !this.isChameleonActive && eitherPressed && this.trion > 0 && this.shieldCooldown <= 0;
+                subShieldActive = !this.isChameleonActive && eitherPressed && this.trion > 0 && this.shieldCooldown <= 0;
             } else {
-                mainShieldActive = !this.isChameleonActive && (hasShieldMain && isLeftMouseDown) && this.trion > 0;
-                subShieldActive = !this.isChameleonActive && (hasShieldSub && isRightMouseDown) && this.trion > 0;
+                mainShieldActive = !this.isChameleonActive && (hasShieldMain && isLeftMouseDown) && this.trion > 0 && this.shieldCooldown <= 0;
+                subShieldActive = !this.isChameleonActive && (hasShieldSub && isRightMouseDown) && this.trion > 0 && this.shieldCooldown <= 0;
             }
 
             const isFullShield = mainShieldActive && subShieldActive;
@@ -4083,16 +4334,28 @@ function startSquadSimulation() {
             const isGimlet = bulletType === 'gimlet';
 
             if (isBlocked && (!isGimlet || isFullShield)) {
-                if (isFullShield) {
-                    this.trion -= amount * 0.08;
+                // Shield holds! Reduce durability
+                this.shieldDurability -= amount;
+
+                if (this.shieldDurability <= 0) {
+                    // Shield shatters!
+                    this.shieldDurability = 0;
+                    this.shieldCooldown = 180; // 3 seconds at 60fps
+                    this.wasShieldActive = false;
+
+                    // Play shatter sound and extra sparks/effects
                     window.audio.playShieldBlock();
-                    spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#ffd700', 16);
+                    if (window.audio.playExplosion) {
+                        window.audio.playShieldBlock();
+                    }
+                    spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#ff3b30', 25);
+                    addLog("[TACTICAL] Your Shield has been SHATTERED! Entering 3s cooldown.", "kill");
                 } else {
-                    this.trion -= amount * 0.25;
+                    // Shield survived the hit
                     window.audio.playShieldBlock();
-                    spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#39ff14', 12);
+                    const sparkColor = isFullShield ? '#ffd700' : '#39ff14';
+                    spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, sparkColor, isFullShield ? 16 : 12);
                 }
-                if (this.trion <= 0) this.trion = 0;
                 return;
             }
 
@@ -4138,11 +4401,11 @@ function startSquadSimulation() {
 
             if (bothAreShield) {
                 const eitherPressed = isLeftMouseDown || isRightMouseDown;
-                mainShield = !this.isChameleonActive && eitherPressed;
-                subShield = !this.isChameleonActive && eitherPressed;
+                mainShield = !this.isChameleonActive && eitherPressed && this.shieldCooldown <= 0;
+                subShield = !this.isChameleonActive && eitherPressed && this.shieldCooldown <= 0;
             } else {
-                mainShield = !this.isChameleonActive && (hasShieldMain && isLeftMouseDown);
-                subShield = !this.isChameleonActive && (hasShieldSub && isRightMouseDown);
+                mainShield = !this.isChameleonActive && (hasShieldMain && isLeftMouseDown) && this.shieldCooldown <= 0;
+                subShield = !this.isChameleonActive && (hasShieldSub && isRightMouseDown) && this.shieldCooldown <= 0;
             }
 
             if (!mainShield && !subShield) return false;
@@ -4154,7 +4417,7 @@ function startSquadSimulation() {
             let angleDiff = attackAngle - this.angle;
             angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
 
-            const currentShieldAngle = (mainShield && subShield) ? 360 : 90;
+            const currentShieldAngle = (mainShield && subShield) ? this.shieldAngleFull : this.shieldAngleStandard;
             const shieldRad = (currentShieldAngle * Math.PI) / 360;
             return Math.abs(angleDiff) <= shieldRad;
         }
@@ -4207,7 +4470,8 @@ function startSquadSimulation() {
     player.leakRate = 0;
     player.activeMainIndex = 0;
     player.activeSubIndex = 0;
-    player.isBagwormActive = (player.briefcase.main[0] === 'Bagworm' || player.briefcase.sub[0] === 'Bagworm');
+    // Bagworm is forced OFF during countdown so player can see all positions on radar
+    player.isBagwormActive = false;
 
     allAgents.push(player);
 
@@ -4268,6 +4532,7 @@ function startSquadSimulation() {
     // Launch pre-match countdown
     startCountdown(() => {
         matchActive = true;
+        activateBagwormOnMatchStart();
         addLog("[TACTICAL] Squad Rank Wars Match Commenced! 3 squads deployed to field.", 'system');
         requestAnimationFrame(gameLoop);
     });
