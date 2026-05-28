@@ -185,10 +185,22 @@ class Arena {
         }
 
         // Keep inside boundary walls absolutely
-        if (result.x < r + this.tileSize) result.x = r + this.tileSize;
-        if (result.x > this.width - r - this.tileSize) result.x = this.width - r - this.tileSize;
-        if (result.y < r + this.tileSize) result.y = r + this.tileSize;
-        if (result.y > this.height - r - this.tileSize) result.y = this.height - r - this.tileSize;
+        if (result.x < r + this.tileSize) {
+            result.x = r + this.tileSize;
+            result.collided = true;
+        }
+        if (result.x > this.width - r - this.tileSize) {
+            result.x = this.width - r - this.tileSize;
+            result.collided = true;
+        }
+        if (result.y < r + this.tileSize) {
+            result.y = r + this.tileSize;
+            result.collided = true;
+        }
+        if (result.y > this.height - r - this.tileSize) {
+            result.y = this.height - r - this.tileSize;
+            result.collided = true;
+        }
 
         return result;
     }

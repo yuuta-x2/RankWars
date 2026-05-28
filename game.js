@@ -177,6 +177,12 @@ function setupAgentSelectors() {
             activeBriefcase.main = [...data.main];
             activeBriefcase.sub = [...data.sub];
             renderBriefcaseHTML();
+
+            // Immediately update Squad Mode captain label
+            const label = document.getElementById('team-1-member-1-label');
+            if (label) {
+                label.textContent = data.name;
+            }
         });
     });
 }
@@ -617,10 +623,17 @@ function setupMouseListeners() {
         const hasShieldSub = activeSubTrig === 'Shield';
         const isHoldingShield = hasShieldMain || hasShieldSub;
 
+        const hasRaygustMain = activeMainTrig === 'Raygust';
+        const hasRaygustSub = activeSubTrig === 'Raygust';
+
         if (isHoldingSniper) {
             // Adjust camera zoom: scroll down (deltaY > 0) to zoom out, scroll up (deltaY < 0) to zoom in
             const direction = e.deltaY > 0 ? -1 : 1;
             cameraZoom = Math.max(0.45, Math.min(1.0, cameraZoom + direction * 0.05));
+        } else if (hasRaygustMain || hasRaygustSub) {
+            // Raygust toggle: toggle mode between 'blade' and 'shield'
+            player.raygustMode = (player.raygustMode === 'shield') ? 'blade' : 'shield';
+            addLog(`[TACTICAL] Raygust morphed to ${player.raygustMode.toUpperCase()} Mode!`, "system");
         } else if (isHoldingShield) {
             const bothAreShield = hasShieldMain && hasShieldSub;
             const direction = e.deltaY > 0 ? 1 : -1; // scroll down = expand (+), scroll up = shrink (-)
@@ -841,6 +854,12 @@ function startSimulation() {
         shieldDurabilityMax: 500,
         shieldCooldown: 0,
         wasShieldActive: false,
+        isRaygustShieldActive: false,
+        raygustMode: 'blade', // 'blade' or 'shield'
+        raygustDurability: 600,
+        raygustDurabilityMax: 600,
+        raygustShieldCooldown: 0,
+        wasRaygustShieldActive: false,
 
         // Passive Camouflage
         isBagwormActive: false,
@@ -895,8 +914,31 @@ function startSimulation() {
             // Normal Hit checks shield block direction (Gimlet is blocked only by Full Shield!)
             const isBlocked = this.isBlockingAngle(attackerId);
             const isGimlet = bulletType === 'gimlet';
+            const isRaygustShield = this.isRaygustShieldActive;
 
-            if (isBlocked && (!isGimlet || isFullShield)) {
+            if (isBlocked && (!isGimlet || isFullShield || isRaygustShield)) {
+                if (isRaygustShield) {
+                    this.raygustDurability -= amount;
+                    if (this.raygustDurability <= 0) {
+                        this.raygustDurability = 0;
+                        this.raygustShieldCooldown = 180; // 3 seconds at 60fps
+                        this.raygustMode = 'blade';
+                        this.isRaygustShieldActive = false;
+
+                        window.audio.playShieldBlock();
+                        if (window.audio.playExplosion) {
+                            window.audio.playShieldBlock();
+                        }
+                        spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#ff3b30', 25);
+                        addLog("[TACTICAL] Your Raygust Shield has been SHATTERED! Switched to Blade Mode (3s cooldown).", "kill");
+                    } else {
+                        this.trion -= amount * 0.15;
+                        window.audio.playShieldBlock();
+                        spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#00ff14', 14);
+                    }
+                    return;
+                }
+
                 // Shield holds! Reduce durability
                 this.shieldDurability -= amount;
 
@@ -972,7 +1014,9 @@ function startSimulation() {
                 subShield = !this.isChameleonActive && (hasShieldSub && isRightMouseDown) && this.shieldCooldown <= 0;
             }
 
-            if (!mainShield && !subShield) return false;
+            const isRaygustShield = this.isRaygustShieldActive;
+
+            if (!mainShield && !subShield && !isRaygustShield) return false;
 
             const attacker = window.allAgents.find(a => a.id === attackerId);
             if (!attacker) return false;
@@ -980,7 +1024,15 @@ function startSimulation() {
             const attackAngle = Math.atan2(attacker.y - this.y, attacker.x - this.x);
             let diff = attackAngle - this.angle;
             diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-            const currentShieldAngle = (mainShield && subShield) ? this.shieldAngleFull : this.shieldAngleStandard;
+            
+            let currentShieldAngle = 90;
+            if (isRaygustShield) {
+                currentShieldAngle = 120; // Raygust Shield Mode covers 120 degrees arc!
+            } else if (mainShield && subShield) {
+                currentShieldAngle = this.shieldAngleFull;
+            } else {
+                currentShieldAngle = this.shieldAngleStandard;
+            }
             const shieldRad = (currentShieldAngle * Math.PI) / 360;
             return Math.abs(diff) <= shieldRad;
         }
@@ -1225,6 +1277,7 @@ function updatePlayerInputPhysics() {
 
     // Decrement shield cooldown
     if (player.shieldCooldown > 0) player.shieldCooldown--;
+    if (player.raygustShieldCooldown > 0) player.raygustShieldCooldown--;
 
     // Decrement composite silence timer
     if (player.compositeSilenceTimer && player.compositeSilenceTimer > 0) {
@@ -1268,8 +1321,16 @@ function updatePlayerInputPhysics() {
     player.isBagwormActive = (player.briefcase.main[player.activeMainIndex] === 'Bagworm' || player.briefcase.sub[player.activeSubIndex] === 'Bagworm');
     player.isChameleonActive = (player.briefcase.main[player.activeMainIndex] === 'Chameleon' || player.briefcase.sub[player.activeSubIndex] === 'Chameleon');
 
+    // Active Raygust Shield Mode check
+    const hasRaygustMain = player.briefcase.main[player.activeMainIndex] === 'Raygust';
+    const hasRaygustSub = player.briefcase.sub[player.activeSubIndex] === 'Raygust';
+    player.isRaygustShieldActive = !player.isChameleonActive && player.trion > 0 && player.raygustShieldCooldown <= 0 && player.raygustMode === 'shield' && (
+        (hasRaygustMain && isLeftMouseDown) || (hasRaygustSub && isRightMouseDown)
+    );
+
     if (player.isBagwormActive) player.trion -= 0.3;
     if (player.isChameleonActive) player.trion -= 0.8;
+    if (player.isRaygustShieldActive) player.trion -= 0.5;
 
     // Active Shield passive drain
     const mainShieldActive = !player.isChameleonActive && (player.briefcase.main[player.activeMainIndex] === 'Shield' && isLeftMouseDown) && player.trion > 0 && player.shieldCooldown <= 0;
@@ -1293,6 +1354,17 @@ function updatePlayerInputPhysics() {
         player.shieldDurability = 0;
     }
     player.wasShieldActive = shieldActive;
+
+    // Update Raygust Shield Durability
+    if (player.isRaygustShieldActive) {
+        if (!player.wasRaygustShieldActive) {
+            player.raygustDurability = player.raygustDurabilityMax;
+        }
+        player.raygustDurability = Math.min(player.raygustDurability, player.raygustDurabilityMax);
+    } else {
+        player.raygustDurability = 0;
+    }
+    player.wasRaygustShieldActive = player.isRaygustShieldActive;
 
     if (player.isLeaking) {
         player.bodyHp -= player.leakRate / 60;
@@ -1349,6 +1421,10 @@ function updatePlayerInputPhysics() {
         currentSpeed *= 0.60; // 40% speed penalty for Full Shield
     } else if (mainShield || subShield) {
         currentSpeed *= 0.80; // 20% speed penalty for Standard Shield
+    }
+
+    if (player.isRaygustShieldActive) {
+        currentSpeed *= 0.50; // 50% speed penalty for heavy Raygust Shield
     }
 
     if (inEnemySpider) {
@@ -1446,6 +1522,8 @@ function executeTriggerAction(side) {
 
     if (trigName === "Empty" || trigName === "Bagworm" || trigName === "Chameleon" || trigName === "Shield" || trigName === "Lead Bullet") return;
 
+    if (trigName === "Raygust" && player.raygustMode === "shield") return;
+
     const config = window.TRIGGER_CATALOG[trigName];
     if (!config) return;
 
@@ -1514,10 +1592,40 @@ function executeTriggerAction(side) {
             player.vx = Math.cos(player.angle) * dashSpeed;
             player.vy = Math.sin(player.angle) * dashSpeed;
             player.isDashing = true;
-            player.dashTimer = 12; // 12 frames lock movement
             player.isWeighted = false; // remove speed debuffs during launch!
             spawnSparks(player.x - Math.cos(player.angle) * 15, player.y - Math.sin(player.angle) * 15, '#00f0ff', 20);
             player.cooldowns[cooldownRef] = config.cooldown;
+
+            if (player.raygustMode === 'blade') {
+                player.dashTimer = 12; // 12 frames lock movement
+                
+                // Blade mode: deals 200 damage to any enemy within 150px and within 60 degrees of front facing angle
+                allAgents.forEach(agent => {
+                    if (agent.id === 'player' || agent.bailedOut) return;
+                    
+                    const dx = agent.x - player.x;
+                    const dy = agent.y - player.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist <= 150 + agent.radius) {
+                        const targetAngle = Math.atan2(dy, dx);
+                        let angleDiff = targetAngle - player.angle;
+                        angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
+                        
+                        const arcSweep = (120 * Math.PI) / 180;
+                        if (Math.abs(angleDiff) <= arcSweep / 2) {
+                            agent.takeDamage(200, 'player', false);
+                            spawnSparks(agent.x, agent.y, '#00ff14', 16);
+                            if (window.audio.playSlash) {
+                                window.audio.playSlash(true);
+                            }
+                            addLog(`[TACTICAL] Thruster Dash-Slash hit AI ${agent.name} for 200 damage!`, 'system');
+                        }
+                    }
+                });
+            } else if (player.raygustMode === 'shield') {
+                player.dashTimer = 16; // Extend dash duration to 16 frames for heavier feel
+                addLog(`[TACTICAL] Thruster Shield Bash charge activated!`, 'system');
+            }
         }
     }
 
@@ -2481,6 +2589,21 @@ function resolveAgentCollisions() {
                     b.x += pushX;
                     b.y += pushY;
 
+                    // Check if Thruster Shield Bash is active
+                    if (a.id === 'player' && a.isDashing && a.raygustMode === 'shield') {
+                        b.vx = Math.cos(a.angle) * 18;
+                        b.vy = Math.sin(a.angle) * 18;
+                        b.stunTimer = 20;
+                        spawnSparks(b.x, b.y, '#00f0ff', 25);
+                        addLog(`[TACTICAL] Thruster Shield Bash knocked back and stunned AI ${b.name}!`, 'system');
+                    } else if (b.id === 'player' && b.isDashing && b.raygustMode === 'shield') {
+                        a.vx = Math.cos(b.angle) * 18;
+                        a.vy = Math.sin(b.angle) * 18;
+                        a.stunTimer = 20;
+                        spawnSparks(a.x, a.y, '#00f0ff', 25);
+                        addLog(`[TACTICAL] Thruster Shield Bash knocked back and stunned AI ${a.name}!`, 'system');
+                    }
+
                     // Resolve wall collision right after pushing to prevent getting pushed into walls
                     const colA = arena.circleCollides(a.x, a.y, a.radius);
                     if (colA.collided) {
@@ -2882,6 +3005,20 @@ function drawPlayerCharacter() {
         ctx.restore();
     }
 
+    // Draw active Raygust heavy Shield arc
+    if (player.isRaygustShieldActive) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(0, 255, 20, 0.85)';
+        ctx.lineWidth = 6;
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = '#00ff14';
+        const shieldRad = (120 * Math.PI) / 360; // 120-degree arc
+        ctx.beginPath();
+        ctx.arc(0, 0, player.radius + 8, -shieldRad, shieldRad);
+        ctx.stroke();
+        ctx.restore();
+    }
+
     // Draw stacked weights indicators if slowed by Lead Bullet or Wires
     if (player.isWeighted) {
         ctx.save();
@@ -3254,6 +3391,21 @@ function renderTacticalRadar() {
 
         radarCtx.save();
 
+        // Determine dot color
+        let color = '#ff3b30'; // Default enemy red
+        if (window.gameMode === 'squad') {
+            const teamColors = {
+                1: '#00f0ff',
+                2: '#ff5722',
+                3: '#bd00ff'
+            };
+            color = teamColors[agent.teamId] || '#ff3b30';
+        } else {
+            if (agent.id === 'player' || isAlly) {
+                color = '#00f0ff';
+            }
+        }
+
         if (agent.id === 'player') {
             if (player.isBagwormActive || player.isChameleonActive) {
                 // Cloaked player: draw as faint, pulsing cyan outline circle for self-navigation feedback
@@ -3268,27 +3420,19 @@ function renderTacticalRadar() {
                 radarCtx.fill();
                 radarCtx.stroke();
             } else {
-                // Active visible player: bright cyber-cyan dot
-                radarCtx.fillStyle = '#00f0ff';
+                // Active visible player: bright cyber squad color dot
+                radarCtx.fillStyle = color;
                 radarCtx.shadowBlur = 10;
-                radarCtx.shadowColor = '#00f0ff';
+                radarCtx.shadowColor = color;
                 radarCtx.beginPath();
                 radarCtx.arc(tx, ty, 4.5, 0, Math.PI * 2);
                 radarCtx.fill();
             }
-        } else if (isAlly) {
-            // Teammate/Ally: glowing tactical cyan dot (bypasses Bagworm, shared feed)
-            radarCtx.fillStyle = '#00f0ff';
-            radarCtx.shadowBlur = 10;
-            radarCtx.shadowColor = '#00f0ff';
-            radarCtx.beginPath();
-            radarCtx.arc(tx, ty, 4.2, 0, Math.PI * 2);
-            radarCtx.fill();
         } else {
-            // Enemy Competitor: glowing tactical red dot
-            radarCtx.fillStyle = '#ff3b30';
+            // Teammate / Enemy: glowing dot of the computed squad color
+            radarCtx.fillStyle = color;
             radarCtx.shadowBlur = 10;
-            radarCtx.shadowColor = '#ff3b30';
+            radarCtx.shadowColor = color;
             radarCtx.beginPath();
             radarCtx.arc(tx, ty, 4.2, 0, Math.PI * 2);
             radarCtx.fill();
@@ -4289,6 +4433,12 @@ function startSquadSimulation() {
         shieldDurabilityMax: 350,
         shieldCooldown: 0,
         wasShieldActive: false,
+        isRaygustShieldActive: false,
+        raygustMode: 'blade', // 'blade' or 'shield'
+        raygustDurability: 600,
+        raygustDurabilityMax: 600,
+        raygustShieldCooldown: 0,
+        wasRaygustShieldActive: false,
         isBagwormActive: false,
         isChameleonActive: false,
         bailedOut: false,
@@ -4332,8 +4482,31 @@ function startSquadSimulation() {
             const isFullShield = mainShieldActive && subShieldActive;
             const isBlocked = this.isBlockingAngle(attackerId);
             const isGimlet = bulletType === 'gimlet';
+            const isRaygustShield = this.isRaygustShieldActive;
 
-            if (isBlocked && (!isGimlet || isFullShield)) {
+            if (isBlocked && (!isGimlet || isFullShield || isRaygustShield)) {
+                if (isRaygustShield) {
+                    this.raygustDurability -= amount;
+                    if (this.raygustDurability <= 0) {
+                        this.raygustDurability = 0;
+                        this.raygustShieldCooldown = 180; // 3 seconds at 60fps
+                        this.raygustMode = 'blade';
+                        this.isRaygustShieldActive = false;
+
+                        window.audio.playShieldBlock();
+                        if (window.audio.playExplosion) {
+                            window.audio.playShieldBlock();
+                        }
+                        spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#ff3b30', 25);
+                        addLog("[TACTICAL] Your Raygust Shield has been SHATTERED! Switched to Blade Mode (3s cooldown).", "kill");
+                    } else {
+                        this.trion -= amount * 0.15;
+                        window.audio.playShieldBlock();
+                        spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#00ff14', 14);
+                    }
+                    return;
+                }
+
                 // Shield holds! Reduce durability
                 this.shieldDurability -= amount;
 
@@ -4408,7 +4581,9 @@ function startSquadSimulation() {
                 subShield = !this.isChameleonActive && (hasShieldSub && isRightMouseDown) && this.shieldCooldown <= 0;
             }
 
-            if (!mainShield && !subShield) return false;
+            const isRaygustShield = this.isRaygustShieldActive;
+
+            if (!mainShield && !subShield && !isRaygustShield) return false;
 
             const attacker = allAgents.find(a => a.id === attackerId);
             if (!attacker) return false;
@@ -4417,7 +4592,14 @@ function startSquadSimulation() {
             let angleDiff = attackAngle - this.angle;
             angleDiff = Math.atan2(Math.sin(angleDiff), Math.cos(angleDiff));
 
-            const currentShieldAngle = (mainShield && subShield) ? this.shieldAngleFull : this.shieldAngleStandard;
+            let currentShieldAngle = 90;
+            if (isRaygustShield) {
+                currentShieldAngle = 120;
+            } else if (mainShield && subShield) {
+                currentShieldAngle = this.shieldAngleFull;
+            } else {
+                currentShieldAngle = this.shieldAngleStandard;
+            }
             const shieldRad = (currentShieldAngle * Math.PI) / 360;
             return Math.abs(angleDiff) <= shieldRad;
         }
@@ -4544,7 +4726,12 @@ function applySquadPreset(teamNum, presetType) {
         tamakoma: ['yuma', 'osamu', 'chika', 'hyuse'],
         ninomiya: ['ninomiya', 'kakizaki', 'yuba', 'suwa'],
         kageura: ['kageura', 'murakami', 'katori', 'nasu'],
-        arafune: ['arafune', 'azuma', 'ikoma', 'suwa']
+        arafune: ['arafune', 'azuma', 'ikoma', 'suwa'],
+        ikoma: ['ikoma', 'yuba', 'suwa', 'katori'],
+        nasu: ['nasu', 'chika', 'azuma', 'yuma'],
+        suwa: ['suwa', 'kakizaki', 'yuba', 'murakami'],
+        azuma: ['azuma', 'arafune', 'chika', 'hyuse'],
+        katori: ['katori', 'kageura', 'yuma', 'suwa']
     };
     const agents = mapping[presetType];
     if (!agents) return;
@@ -4608,12 +4795,18 @@ function setupSquadModeUI() {
     const randBtn = document.getElementById('squad-randomize-btn');
     if (randBtn) {
         randBtn.addEventListener('click', () => {
-            const presets = ['tamakoma', 'ninomiya', 'kageura', 'arafune'];
+            const presets = ['tamakoma', 'ninomiya', 'kageura', 'arafune', 'ikoma', 'nasu', 'suwa', 'azuma', 'katori'];
+            const p1 = presets[Math.floor(Math.random() * presets.length)];
             const p2 = presets[Math.floor(Math.random() * presets.length)];
             const p3 = presets[Math.floor(Math.random() * presets.length)];
 
+            const sel1 = document.getElementById('squad-preset-1');
             const sel2 = document.getElementById('squad-preset-2');
             const sel3 = document.getElementById('squad-preset-3');
+            if (sel1) {
+                sel1.value = p1;
+                applySquadPreset(1, p1);
+            }
             if (sel2) {
                 sel2.value = p2;
                 applySquadPreset(2, p2);
@@ -4622,7 +4815,7 @@ function setupSquadModeUI() {
                 sel3.value = p3;
                 applySquadPreset(3, p3);
             }
-            addLog(`[TACTICAL] Randomized Rival Squads! Loaded Preset: Team 2 (${p2.toUpperCase()}), Team 3 (${p3.toUpperCase()})`, 'system');
+            addLog(`[TACTICAL] Randomized All Squads! Loaded Preset: Team 1 (${p1.toUpperCase()}), Team 2 (${p2.toUpperCase()}), Team 3 (${p3.toUpperCase()})`, 'system');
         });
     }
 

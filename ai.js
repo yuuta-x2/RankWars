@@ -140,6 +140,21 @@ class AIAgent {
         this.isBagwormActive = false;
     }
 
+    smoothTurnTo(targetAngle) {
+        let diff = targetAngle - this.angle;
+        // Normalize diff to [-PI, PI]
+        while (diff < -Math.PI) diff += Math.PI * 2;
+        while (diff > Math.PI) diff -= Math.PI * 2;
+
+        // Turn speed: 0.18 rad per frame (approx 10 degrees)
+        const maxStep = 0.18;
+        if (Math.abs(diff) > maxStep) {
+            this.angle += Math.sign(diff) * maxStep;
+        } else {
+            this.angle = targetAngle;
+        }
+    }
+
     applyPreset(preset) {
         if (preset === 'yuma') {
             this.briefcase.main = ["Scorpion", "Shield", "Grasshopper", "Empty"];
@@ -686,7 +701,7 @@ class AIAgent {
             if (dist > 15) {
                 this.vx = (dx / dist) * currentSpeed;
                 this.vy = (dy / dist) * currentSpeed;
-                this.angle = Math.atan2(dy, dx);
+                this.smoothTurnTo(Math.atan2(dy, dx));
             } else {
                 this.vx = 0;
                 this.vy = 0;
@@ -747,7 +762,7 @@ class AIAgent {
         // 3. COMBAT ACTIONS & TRIGGER USE
         if (this.targetAgent && threatDist < engageDist && (!this.stunTimer || this.stunTimer <= 0)) {
             // Aim facing vector at threat
-            this.angle = Math.atan2(this.targetAgent.y - this.y, this.targetAgent.x - this.x);
+            this.smoothTurnTo(Math.atan2(this.targetAgent.y - this.y, this.targetAgent.x - this.x));
 
             // Execute specific trigger attacks (only if trion > 0)
             if (this.trion > 0) {
