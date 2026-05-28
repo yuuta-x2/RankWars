@@ -101,6 +101,10 @@ class AIAgent {
         this.isChameleonActive = false;
         this.isRaygustShieldActive = false;
         this.isShieldActive = false;
+        this.shieldDurabilityMax = 500;
+        this.shieldDurability = 500;
+        this.shieldCooldown = 0;
+        this.wasShieldActive = false;
         this.prefersBagworm = Math.random() < 0.65;
 
         // Timers & State Machine
@@ -246,6 +250,8 @@ class AIAgent {
     }
 
     takeDamage(amount, attackerId, isLeadBullet = false, bulletType = '') {
+        // Training dummies can take damage and bail out normally.
+
         // If bodyHp is already 0, any hit triggers bail out
         if (this.bodyHp <= 0) {
             if (!this.bailedOut) {
@@ -286,7 +292,7 @@ class AIAgent {
             const isRaygustShield = this.isRaygustShieldActive;
             const isGimlet = bulletType === 'gimlet';
 
-            if (hasShield || isRaygustShield) {
+            if ((hasShield || isRaygustShield) && this.shieldCooldown <= 0) {
                 const attacker = (typeof allAgents !== 'undefined') ? allAgents.find(a => a.id === attackerId) : null;
                 if (attacker) {
                     let shouldBlock = false;
@@ -326,28 +332,51 @@ class AIAgent {
                     }
 
                     if (shouldBlock && (!isGimlet || isFullShield || isRaygustShield)) {
-                        if (isRaygustShield) {
-                            // Raygust Shield holds! Heavy defense: only 15% Trion cost drain
-                            this.trion -= amount * 0.15;
-                            window.audio.playShieldBlock();
+                        // Play block sound
+                        window.audio.playShieldBlock();
+
+                        // Spark color based on shield type
+                        const sparkColor = isRaygustShield ? '#00ff14' : (isFullShield ? '#ffd700' : '#39ff14');
+
+                        // Ensure shieldDurability/Max are initialized
+                        if (this.shieldDurabilityMax === undefined) this.shieldDurabilityMax = 500;
+                        if (this.shieldDurability === undefined) this.shieldDurability = this.shieldDurabilityMax;
+
+                        // Reduce durability
+                        this.shieldDurability -= amount;
+
+                        if (this.shieldDurability <= 0) {
+                            // Shield shatters!
+                            this.shieldDurability = 0;
+                            this.shieldCooldown = 180; // 3 seconds cooldown
+                            this.isShieldActive = false;
+                            this.isRaygustShieldActive = false;
+                            this.wasShieldActive = false;
+
                             if (window.spawnSparks) {
-                                window.spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#00ff14', 14);
+                                window.spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#ff3b30', 25);
                             }
-                        } else if (isFullShield) {
-                            // Full Shield holds! Only drain 8% of the damage as Trion cost
-                            this.trion -= amount * 0.08;
-                            window.audio.playShieldBlock();
-                            if (window.spawnSparks) {
-                                window.spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#ffd700', 16);
+                            if (typeof addLog !== 'undefined') {
+                                addLog(`[TACTICAL] ${this.name}'s Shield has been SHATTERED! Entering 3s cooldown.`, "kill");
                             }
                         } else {
-                            // Standard Shield holds! Completely block damage to Trion HP body, charge 25% Trion cost
-                            this.trion -= amount * 0.25;
-                            window.audio.playShieldBlock();
+                            // Shield holds! Spawn block sparks
                             if (window.spawnSparks) {
-                                window.spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, '#39ff14', 12);
+                                window.spawnSparks(this.x + Math.cos(this.angle) * 22, this.y + Math.sin(this.angle) * 22, sparkColor, 12);
+                            }
+                            
+                            // Also drain Trion normally for standard match bots (non-dummies)
+                            if (!this.isTrainingDummy) {
+                                if (isRaygustShield) {
+                                    this.trion -= amount * 0.15;
+                                } else if (isFullShield) {
+                                    this.trion -= amount * 0.08;
+                                } else {
+                                    this.trion -= amount * 0.25;
+                                }
                             }
                         }
+
                         if (this.trion <= 0) {
                             this.trion = 0;
                             this.isShieldActive = false;
@@ -401,6 +430,86 @@ class AIAgent {
 
     update(arena, allAgents, bullets, grPads, logs) {
         if (this.bailedOut) return;
+
+        if (this.isTrainingDummy) {
+            this.isLeaking = false;
+            
+            if (this.dummyType === 'static') {
+                this.vx = 0;
+                this.vy = 0;
+                this.isShieldActive = false;
+                this.isRaygustShieldActive = false;
+                return;
+            }
+            
+            if (this.dummyType === 'shield') {
+                this.vx = 0;
+                this.vy = 0;
+                const playerAgent = allAgents.find(a => a.id === 'player');
+                if (playerAgent) {
+                    this.angle = Math.atan2(playerAgent.y - this.y, playerAgent.x - this.x);
+                }
+                
+                // Initialize durability if not present
+                if (this.shieldDurability === undefined) {
+                    this.shieldDurabilityMax = 500;
+                    this.shieldDurability = 500;
+                    this.shieldCooldown = 0;
+                }
+                
+                if (this.shieldCooldown > 0) {
+                    this.shieldCooldown--;
+                    this.isShieldActive = false;
+                } else {
+                    if (!this.isShieldActive) {
+                        this.isShieldActive = true;
+                        this.shieldDurability = this.shieldDurabilityMax;
+                    }
+                }
+                
+                // Synchronize durability transitions for Shield Dummy
+                const shieldActive = this.isShieldActive;
+                if (shieldActive) {
+                    if (!this.wasShieldActive) {
+                        this.shieldDurability = this.shieldDurabilityMax;
+                    }
+                } else {
+                    this.shieldDurability = 0;
+                }
+                this.wasShieldActive = shieldActive;
+
+                this.trion = this.trionMax;
+                return;
+            }
+            
+            if (this.dummyType === 'combat') {
+                const aggression = typeof window.trainingAggression !== 'undefined' ? window.trainingAggression : 0;
+                if (aggression === 0) {
+                    this.vx = 0;
+                    this.vy = 0;
+                    this.isShieldActive = false;
+                    this.isRaygustShieldActive = false;
+                    return;
+                }
+            }
+        }
+
+        // Update shield durability and cooldown for standard match bots and combat trainer
+        if (this.shieldCooldown > 0) {
+            this.shieldCooldown--;
+            this.isShieldActive = false;
+        }
+
+        const shieldActive = this.isShieldActive && this.trion > 0 && this.shieldCooldown <= 0;
+        if (shieldActive) {
+            if (!this.wasShieldActive) {
+                this.shieldDurability = this.shieldDurabilityMax || 500;
+            }
+            this.shieldDurability = Math.min(this.shieldDurability || 500, this.shieldDurabilityMax || 500);
+        } else {
+            this.shieldDurability = 0;
+        }
+        this.wasShieldActive = shieldActive;
 
         // Decrement cooldowns based on difficulty
         let cdReduction = 16.67; // ms (approx 60fps frame)
@@ -766,7 +875,22 @@ class AIAgent {
 
             // Execute specific trigger attacks (only if trion > 0)
             if (this.trion > 0) {
-                this.performCombatAction(threatDist, bullets, grPads, arena);
+                if (this.isTrainingDummy && this.dummyType === 'combat') {
+                    const aggression = typeof window.trainingAggression !== 'undefined' ? window.trainingAggression : 0;
+                    if (aggression === 1) {
+                        // WALK ONLY - DO NOT ATTACK
+                    } else if (aggression === 2) {
+                        // Slow attack rate: 8% chance per frame to attack
+                        if (Math.random() < 0.08) {
+                            this.performCombatAction(threatDist, bullets, grPads, arena);
+                        }
+                    } else if (aggression === 3) {
+                        // Full attack
+                        this.performCombatAction(threatDist, bullets, grPads, arena);
+                    }
+                } else {
+                    this.performCombatAction(threatDist, bullets, grPads, arena);
+                }
             }
         }
     }
@@ -1823,6 +1947,19 @@ class AIAgent {
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
             ctx.lineWidth = 0.5;
             ctx.strokeRect(barX, barY2, barWidth, barHeight);
+
+            // Shield Durability Bar (Yellow-Orange, only if active)
+            if (this.shieldDurability > 0) {
+                const barY3 = this.y - 43;
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                ctx.fillRect(barX, barY3, barWidth, barHeight);
+                const shieldFillWidth = Math.max(0, Math.min(1, this.shieldDurability / (this.shieldDurabilityMax || 500))) * barWidth;
+                ctx.fillStyle = '#ffdf00'; // Shield Yellow
+                ctx.fillRect(barX, barY3, shieldFillWidth, barHeight);
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+                ctx.lineWidth = 0.5;
+                ctx.strokeRect(barX, barY3, barWidth, barHeight);
+            }
 
             ctx.restore();
         }

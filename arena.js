@@ -96,6 +96,17 @@ class Arena {
                         if (isColumn) {
                             tile.type = 'indestructible';
                         }
+                    } else if (mapType === 'training_sandbox') {
+                        // Wide open space with central cross walls for tactical spider/viper drills
+                        const midC = Math.floor(this.cols / 2);
+                        const midR = Math.floor(this.rows / 2);
+                        const isCenterWall = (
+                            (c === midC && r >= midR - 3 && r <= midR + 3) ||
+                            (r === midR && c >= midC - 3 && c <= midC + 3)
+                        );
+                        if (isCenterWall) {
+                            tile.type = 'indestructible';
+                        }
                     } else if (mapType === 'cybergrid') {
                         // Cyber Grid features small sparse pillars that cannot be destroyed
                         const isPillar = (
